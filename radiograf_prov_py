@@ -1,0 +1,260 @@
+#importo librerias
+
+from pylinac import PicketFence
+from pylinac import Starshot
+from pylinac import WinstonLutz
+from pylinac import FlatSym
+from os import listdir
+from tkinter import filedialog
+from tkinter.filedialog import askopenfilename
+from tkinter import *
+from tkinter import messagebox
+import numpy as np
+import matplotlib.pyplot as plt
+plt.style.use('seaborn-white')
+import scipy as sp
+from scipy import signal as signal
+from scipy.signal import peak_widths
+import pydicom
+import cv2
+from skimage import img_as_ubyte
+
+
+
+
+#Defino las funciones
+
+def Picket_Fence():
+    filename = filedialog.askdirectory()
+    files = []
+    for f in listdir(filename):
+        if f.endswith('.'+ r'dcm'):
+            files.append(filename + '\\' + f)
+    pf = PicketFence.from_multiple_images(files)
+    pf.analyze(tolerance=0.6, action_tolerance=0.5)
+    pf.publish_pdf('mypf.pdf')
+    return
+def StarShot():
+    filename = filedialog.askdirectory()
+    files = []
+    for f in listdir(filename):
+        if f.endswith('.'+ r'dcm'):
+            files.append(filename + '\\' + f)
+    mystar = Starshot.from_multiple_images(files)
+    mystar.analyze(radius=0.5, tolerance=1.0)
+    mystar.publish_pdf('mystar.pdf')
+    return
+def WL():
+    filename = filedialog.askdirectory()
+    my_directory = filename
+    wl = WinstonLutz(my_directory)
+    messagebox.showinfo("Corrimientos", wl.bb_shift_instructions())
+    return
+def Asimetrico():
+    filename = filedialog.askdirectory()
+    files = []
+    for f in listdir(filename):
+        if f.endswith('.'+ r'dcm'):
+            files.append(filename + '\\' + f)
+    A = pydicom.dcmread(files[0]).pixel_array + pydicom.dcmread(files[1]).pixel_array
+    M = pydicom.dcmread(files[0]).RadiationMachineSAD/pydicom.dcmread(files[0]).RTImageSID
+    print(M)
+    PSIN = pydicom.dcmread(files[0]).ImagePlanePixelSpacing[0]
+    Perfil = A[:, int(A.shape[1]/2)]
+    PerfilB = np.array([])
+    for v in Perfil:
+        if v<0.05*np.max(Perfil):
+            v = 0
+        else:
+            v = v - (0.05*np.max(Perfil))
+        PerfilB = np.append(PerfilB, v)
+    G = signal.medfilt(np.abs(np.gradient(PerfilB)),15)
+    Pk, _ = signal.find_peaks(G, height=0.1*np.amax(G))
+    wP = signal.peak_widths(G, Pk, rel_height = 0.5)
+    l1 = wP[2][int(wP[2].size/2)]
+    l2 = wP[3][int(wP[2].size/2)]
+    dX1 = int((Pk[int(Pk.size/2)]-Pk[int(Pk.size/2)-1])/6)
+    dX2 = int((Pk[int(Pk.size/2)]-Pk[int(Pk.size/2)+1])/6)
+    pb = np.array([])
+    t = np.array([])
+    Cbase = 0
+    for j in range(1,5):
+        Cbase = Cbase + Perfil[Pk[(int(Pk.size/2)-1)]+(j*dX1)]
+        pb = np.append( pb, Perfil[Pk[(int(Pk.size/2)-1)]+(j*dX1)])
+        t = np.append(t, Pk[(int(Pk.size/2)-1)]+(j*dX1))
+    for j in range(1,5):
+        Cbase = Cbase + Perfil[Pk[(int(Pk.size/2)+1)]-(j*dX1)]
+        pb = np.append( pb, Perfil[Pk[(int(Pk.size/2)+1)]-(j*dX1)])
+        t = np.append(t, Pk[(int(Pk.size/2)+1)]-(j*dX1))
+    PV = 100 - (((Cbase/8)*100)/(np.amax(Perfil)))
+    informe = plt.figure()
+    informe.set_size_inches(8.5, 15)
+    plt.subplot(4, 2, 1)
+    plt.text(0, 0, 'Control de campos asimetricos', fontsize=22)
+    plt.setp(plt.gca(), frame_on=False, xticks=(), yticks=())
+    plt.subplot(4, 2, 5)
+    plt.plot(Perfil)
+    plt.plot(t, pb, 'ro', color='g')
+    plt.axvline(x=round(l1), color='r')
+    plt.axvline(x=round(l2), color='r')
+    plt.subplot(4, 2, 3)
+    plt.imshow(A, cmap = plt.cm.bone)
+    plt.axvline(x=int(A.shape[1]/2), color='g')
+    plt.axhline(y=round(l1), color='r')
+    plt.axhline(y=round(l2), color='r')
+    plt.subplot(4, 2, 7)
+    plt.plot(G)
+    plt.subplot(4, 2, 4)
+    plt.setp(plt.gca(), frame_on=False, xticks=(), yticks=())
+    the_table = plt.table(cellText=[[str(pydicom.dcmread(files[0]).StudyDate)[6:8]+'-'+str(pydicom.dcmread(files[0]).StudyDate)[4:6]+'-'+str(pydicom.dcmread(files[0]).StudyDate)[0:4]],[pydicom.dcmread(files[0]).GantryAngle], [pydicom.dcmread(files[0]).BeamLimitingDeviceAngle]], rowLabels=['Fecha de control:', 'Angulo de gantry:', 'Angulo de colimador:'], loc='right')
+    the_table.auto_set_font_size(False)
+    the_table.set_fontsize(14)
+    the_table.scale(0.6, 1.5)
+    plt.subplot(4, 2, 6)
+    plt.setp(plt.gca(), frame_on=False, xticks=(), yticks=())
+    resultados = plt.table(cellText=[[str("%.2f" % PV)+'%'], [str("%.3f" % (M*PSIN*wP[0][1]))+' mm']], rowLabels=['% de variacion:', 'Ancho de union:'], loc='right')
+    resultados.auto_set_font_size(False)
+    resultados.set_fontsize(14)
+    resultados.scale(0.5, 1.5)
+    #plt.imshow(A, cmap=plt.cm.bone)
+    #plt.show()
+    informe.savefig('asimetricos.pdf', bbox_inches='tight', papertype= 'letter')
+    return
+def WLTest():
+    filename = filedialog.askdirectory()
+    my_directory = filename
+    wl = WinstonLutz(my_directory)
+    #messagebox.showinfo("Corrimientos", wl.bb_shift_instructions())
+    wl.publish_pdf('mywl.pdf')
+    return
+def PyS():
+    filename = askopenfilename()
+    my_img = FlatSym(path=filename)
+    my_img.analyze(flatness_method='varian', symmetry_method='varian')
+    my_img.publish_pdf(filename="flatsym.pdf")
+    return
+def LumRad():
+    DirLum = askopenfilename(title = "Seleccione Imagen del campo luminico")
+    DirEx = askopenfilename(title = "Seleccione Imagen de campo extendido")
+    Extendido = pydicom.dcmread(DirEx)
+    Lum = pydicom.dcmread(DirLum)
+    Long = Lum.pixel_array[:,int(Lum.pixel_array.shape[1]/2)]
+    Trans = Lum.pixel_array[int(Lum.pixel_array.shape[0]/2),:]
+    Extendido8 = img_as_ubyte(Extendido.pixel_array)
+    A = Extendido.RadiationMachineSAD/Extendido.RTImageSID
+    PSIN = Extendido.ImagePlanePixelSpacing[0]
+    PSCS = Extendido.ImagePlanePixelSpacing[1]
+    circles = cv2.HoughCircles(Extendido8,cv2.HOUGH_GRADIENT,0.2,40,param1=10,param2=10,minRadius=2,maxRadius=8)
+    HS = np.array([])
+    HI = np.array([])
+    LI = np.array([])
+    LD = np.array([])
+    S = np.amin(circles[0,:,0])
+    I = np.amax(circles[0,:,0])
+    Izq = np.amin(circles[0,:,1])
+    Der =  np.amax(circles[0,:,1])
+    for c in range(circles.shape[1]):
+        if circles[0,c,0] < S+5:
+            HS = np.append(HS, circles[0,c,0])
+    for c in range(circles.shape[1]):
+        if circles[0,c,0] > I-5:
+            HI = np.append(HI, circles[0,c,0])
+    for c in range(circles.shape[1]):
+        if circles[0,c,1] < Izq+5:
+            LI = np.append(LI, circles[0,c,1])
+    for c in range(circles.shape[1]):
+        if circles[0,c,1] > Der-5:
+            LD = np.append(LD, circles[0,c,1])
+    PerfilT = np.array([])
+    PerfilL = np.array([])
+    for v in Trans:
+        if v<0.05*np.max(Trans):
+            v=0
+        else:
+            v=v-0.05*np.max(Trans)
+        PerfilT = np.append( PerfilT , v )
+    for v in Long:
+        if v<0.05*np.max(Long):
+            v=0
+        else:
+            v=v-0.05*np.max(Long)
+        PerfilL = np.append( PerfilL , v )
+    GL = signal.medfilt(np.abs(np.gradient(PerfilL)),15)
+    GT = signal.medfilt(np.abs(np.gradient(PerfilT)),15)
+    PL, _ = signal.find_peaks(GL, height=0.2*np.amax(GL))
+    PT, _ = signal.find_peaks(GT, height=0.2*np.amax(GT))
+    Lumiz = PT[0]
+    Lumd = PT[1]
+    Lums = PL[0]
+    Lumi = PL[1]
+    DS = np.array([])
+    DI = np.array([])
+    DIzq = np.array([])
+    DD = np.array([])
+    for j in HS:
+        DS = np.append(DS, (Lums-j))
+    for j in HI:
+        DI = np.append(DI, (j-Lumi))
+    for j in LI:
+        DIzq = np.append(DIzq, (Lumiz-j))
+    for j in LD:
+        DD = np.append(DD, (j-Lumd))
+    informe = plt.figure()
+    informe.set_size_inches(15.5, 20)
+    plt.subplot(3, 2, 1)
+    plt.text(0, 0 , 'Control coincidencia Luminico-Radiante', fontsize=22,horizontalalignment='center',verticalalignment='bottom')
+    plt.setp(plt.gca(), frame_on=False, xticks=(), yticks=())
+    plt.subplot(3, 2, 6)
+    plt.text(0, 0 , '*Corrimientos calculados de campo luminico con respecto a campo radiante', fontsize=14,horizontalalignment='center',verticalalignment='bottom')
+    plt.setp(plt.gca(), frame_on=False, xticks=(), yticks=())
+    plt.subplot(3, 2, 3)
+    suma = Extendido.pixel_array + Lum.pixel_array
+    x = circles[0,:,0]
+    y = circles[0,:,1]
+    plt.imshow(suma, cmap=plt.cm.bone)
+    plt.axvline(x = int(suma.shape[1]/2), color= 'b')
+    plt.axhline(y = int(suma.shape[0]/2), color= 'g')
+    plt.scatter(x, y, c='r', s=1)
+    plt.subplot(3, 2, 4)
+    plt.setp(plt.gca(), frame_on=False, xticks=(), yticks=())
+    the_table = plt.table(cellText=[[str(Extendido.AcquisitionDate)[6:8]+'-'+str(Extendido.AcquisitionDate)[4:6]+'-'+str(Extendido.AcquisitionDate)[0:4]],[Extendido.GantryAngle],[Extendido.BeamLimitingDeviceAngle]], rowLabels=['Fecha del control:','Angulo de gantry:','Angulo de colimador:'],loc='center', cellLoc='left')
+    the_table.auto_set_font_size(False)
+    the_table.set_fontsize(14)
+    the_table.scale(0.6, 1.5)
+    plt.subplot(3, 2, 5)
+    plt.setp(plt.gca(), frame_on=False, xticks=(), yticks=())
+    matriz_resultados=[[str("%.3f" % (np.median(DS)*(PSIN*A))+' mm'),str("%.3f" % (np.amax(DS)*(PSIN*A))+' mm')],[str("%.3f" % (np.median(DI)*(PSIN*A))+' mm'),str("%.3f" % (np.amax(DI)*(PSIN*A))+' mm')],[str("%.3f" % (np.median(DIzq)*(PSCS*A))+' mm'),str("%.3f" % (np.amax(DIzq)*(PSCS*A))+' mm')],[str("%.3f" % (np.median(DD)*(PSCS*A))+' mm'),str("%.3f" % (np.amax(DD)*(PSCS*A))+' mm')]]
+    columnas = ['Dif. Lum/Rad (Mediana)','Dif. Lum/Rad (Max)']
+    Filas = ['Distancia hacia gantry','Distancia hacia pies','Distancia izquierda','Distancia derecha']
+    resultados = plt.table(cellText=matriz_resultados, rowLabels=Filas, colLabels=columnas, colWidths=[1.0,1.0], loc='center', cellLoc='center')
+    resultados.auto_set_font_size(False)
+    resultados.set_fontsize(14)
+    resultados.scale(0.5, 1.5)
+    informe.savefig('CLumRad.pdf',bbox_inches='tight', papertype= 'letter', dpi=900, orientation='landscape')
+    return
+#Armo la interfaz
+root = Tk()
+root.title("Controles Radiograficos")
+lbl2 = Label(master=root,text = '')
+lbl2.grid(row=0, column=2)
+lbl1 = Label(master=root,text = 'Seleccione control a realizar:')
+lbl1.grid(row=1, column=2)
+button2 = Button(text="Picket Fence", command=Picket_Fence)
+button2.grid(row=2, column=2)
+button1 = Button(text="Estrellas", command=StarShot)
+button1.grid(row=3, column=2)
+button3 = Button(text="Campos Asimetricos", command=Asimetrico)
+button3.grid(row=4, column=2)
+button4 = Button(text="Winston Lutz Corrimientos de laser", command=WL)
+button4.grid(row=5, column=2)
+button5 = Button(text="Test Winston Lutz", command=WLTest)
+button5.grid(row=6, column=2)
+#button6 = Button(text="Planicidad y Simetria", command=PyS)
+#button6.grid(row=7, column=2)
+button7 = Button(text="Coincidencia Luminico-Radiante", command=LumRad)
+button7.grid(row=7, column=2)
+button8 = Button(text="Control de campos opuestos", command=LumRad)
+button8.grid(row=9, column=2)
+button9 = Button(text="Planicidad & Simetria", command=PyS)
+button9.grid(row=10, column=2)
+mainloop()
